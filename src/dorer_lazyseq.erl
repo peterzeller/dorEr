@@ -1,7 +1,7 @@
 -module(dorer_lazyseq).
 
 
--export([empty/0, append/2, from_list/1, iterate/2, remove_first/1, map/2, flatmap/2, append/1]).
+-export([empty/0, append/2, from_list/1, iterate/2, remove_first/1, map/2, flatmap/2, append/1, to_list/1]).
 
 -export_type([seq/1]).
 
@@ -46,6 +46,14 @@ iterate(First, Next) ->
 
 -spec from_list([T]) -> seq(T).
 from_list(List) -> List.
+
+-spec to_list(seq(T)) -> list(T).
+to_list(L) ->
+  case remove_first(L) of
+    eof -> [];
+    {next, X, Rest} ->
+      [X|to_list(Rest)]
+  end.
 
 -spec remove_first(seq(T)) -> eof | {next, T, seq(T)}.
 remove_first([]) -> eof;

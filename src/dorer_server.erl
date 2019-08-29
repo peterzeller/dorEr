@@ -19,8 +19,9 @@
   options :: dorer:options(),
   size :: integer(),
   mode :: random | small,
-  generated_values :: [any()],
-  log :: [any()]
+  generated_values = [] :: [{Name :: any(), Gen :: dorer_generators:generator(), Value :: any()}],
+  replay_gen :: undefined | [{Name :: any(), Gen :: dorer_generators:generator(), Value :: any()}],
+  log = [] :: [any()]
 }).
 
 %%%===================================================================
@@ -65,11 +66,11 @@ call(Request) ->
   {stop, Reason :: term()} | ignore).
 init([Options]) ->
   io:format(user, "Initializing Dorer Server~n", []),
-  rand:seed(exro928ss, 1),
+  rand:seed(exsplus, {47, 1, 1}),
   {ok, #state{
     options = Options,
-    mode = maps:get(strategy, Options, random),
-    size = 5
+    mode    = maps:get(strategy, Options, random),
+    size    = 5
   }}.
 
 %%--------------------------------------------------------------------
@@ -80,32 +81,64 @@ init([Options]) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(handle_call(Request :: term(), From :: {pid(), Tag :: term()},
-    State :: #state{}) ->
+  State :: #state{}) ->
   {reply, Reply :: term(), NewState :: #state{}} |
   {reply, Reply :: term(), NewState :: #state{}, timeout() | hibernate} |
   {noreply, NewState :: #state{}} |
   {noreply, NewState :: #state{}, timeout() | hibernate} |
   {stop, Reason :: term(), Reply :: term(), NewState :: #state{}} |
   {stop, Reason :: term(), NewState :: #state{}}).
-handle_call({generate, Gen}, _From, State) ->
-  Res = dorer_generators:random_gen(Gen, State#state.size),
-  {reply, Res, State#state{
-    generated_values = [Res | State#state.generated_values]
+handle_call({generate, Name, Gen}, _From, State) ->
+  {Res, State2} = case State#state.replay_gen of
+    undefined ->
+      R = dorer_generators:random_gen(Gen, State#state.size),
+      {R, State};
+    ReplayGen ->
+      case maps:get(name, Gen) of
+        has_more ->
+          R = lists:any(fun
+            ({Name2, _, _}) -> dorer_list_utils:is_prefix(Name, Name2)
+          end, ReplayGen),
+          {R, State};
+        _ ->
+          case lists:search(fun({Name2, Gen2, _Val}) -> Name == Name2 andalso maps:get(name, Gen) == maps:get(name, Gen2) end, ReplayGen) of
+            {value, X = {_Name2, _Gen2, Val}} ->
+              R = dorer_generators:try_adapt_value(Gen, Val),
+              S2 = State#state{
+                replay_gen = ReplayGen -- [X]
+              },
+              {R, S2};
+            false ->
+              throw({dorer_replay_error, {'could not find value for', Name}})
+          end
+      end
+  end,
+  {reply, Res, State2#state{
+    generated_values = [{Name, Gen, Res} | State#state.generated_values]
   }};
 handle_call({init, I}, _From, State) ->
   NewState = State#state{
-    log = [],
+    log              = [],
     generated_values = [],
-    size = 1 + 1*I
+    size             = 1 + 1 * I,
+    replay_gen       = undefined
+  },
+  {reply, ok, NewState};
+handle_call({init_replay, GeneratedS}, _From, State) when is_list(GeneratedS) ->
+  NewState = State#state{
+    log              = [],
+    generated_values = [],
+    replay_gen       = GeneratedS
   },
   {reply, ok, NewState};
 handle_call(get_log, _From, State) ->
   {reply, lists:reverse(State#state.log), State};
 handle_call(get_generated_values, _From, State) ->
   {reply, lists:reverse(State#state.generated_values), State};
-handle_call(Request, _From, State) ->
-  io:format("unhandled request: ~p~n", [Request]),
-  {reply, {error, {invalid_request, Request}}, State}.
+handle_call({log, Message}, _From, State) ->
+  {reply, ok, State#state{log = [Message | State#state.log]}};
+handle_call(Request, _From, _State) ->
+  throw({unhandled_request, Request}).
 
 %%--------------------------------------------------------------------
 %% @private
@@ -150,7 +183,7 @@ handle_info(_Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(terminate(Reason :: (normal | shutdown | {shutdown, term()} | term()),
-    State :: #state{}) -> term()).
+  State :: #state{}) -> term()).
 terminate(_Reason, _State) ->
   ok.
 
@@ -163,7 +196,7 @@ terminate(_Reason, _State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(code_change(OldVsn :: term() | {down, term()}, State :: #state{},
-    Extra :: term()) ->
+  Extra :: term()) ->
   {ok, NewState :: #state{}} | {error, Reason :: term()}).
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
