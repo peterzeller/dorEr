@@ -5,7 +5,7 @@
 -endif.
 
 
--export([group_by_first/1, group_by/2, group_by/4, reduce/2, topsort/2, is_prefix/2, with_index/1, iterate/2]).
+-export([group_by_first/1, group_by/2, group_by/4, reduce/2, topsort/2, is_prefix/2, with_index/1, iterate/2, pick_most_similar/2]).
 
 
 %% groups a list of key-value pairs by key
@@ -66,6 +66,37 @@ iterate(Start, Fun) ->
     break -> [];
     {continue, X} -> [X | iterate(X, Fun)]
   end.
+
+
+
+pick_most_similar(_Elem, []) -> throw('no choices available');
+pick_most_similar(Elem, List) ->
+  WithSimilarity = [{similarity(Elem, X), X} || X <- List],
+  {_, Res} = lists:max(WithSimilarity),
+  {ok, Res}.
+
+
+similarity(X, X) -> 1;
+similarity(X, Y) when is_atom(X) andalso is_atom(Y) ->
+  0.1;
+similarity(X, Y) when is_list(X) andalso is_list(Y) ->
+  case {X, Y} of
+    {[], _} -> 0.1;
+    {_, []} -> 0.1;
+    {[A | As], [A | Bs]} ->
+      L = max(length(As), length(Bs)),
+      1 / (1 + L) + similarity(As, Bs) * L / (1 + L);
+    {[A | As], Xs} ->
+      L = max(1 + length(As), length(Xs)),
+      {ok, Sim} = pick_most_similar(A, Xs),
+      similarity(A, Sim) / L + similarity(As, Xs -- [Sim]) * (L - 1) / L
+  end;
+similarity(X, Y) when is_tuple(X) andalso is_tuple(Y) ->
+  0.5 + similarity(tuple_to_list(X), tuple_to_list(Y)) * 0.5;
+similarity(X, Y) when is_map(X) andalso is_map(Y) ->
+  0.5 + similarity(maps:to_list(X), maps:to_list(Y)) * 0.5;
+similarity(_, _) -> 0.
+
 
 -ifdef(TEST).
 group_by_first_test() ->
