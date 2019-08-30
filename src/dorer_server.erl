@@ -121,7 +121,10 @@ handle_call2({generate, Name, Gen}, State) ->
               },
               {ok, RM, S2};
             false ->
-              {error, {dorer_replay_error, {'could not find value for', Name}}}
+              % no recorded value found, generate a new one
+              RM = dorer_generators:random_gen(Gen, State#state.size),
+              {ok, RM, State}
+%%              {error, {dorer_replay_error, {'could not find value for', Name}}}
           end
       end
   end,

@@ -22,7 +22,7 @@ append([X | Xs]) -> append(X, append(Xs)).
 append(A, B) ->
   fun() ->
     case remove_first(A) of
-      eof -> B();
+      eof -> remove_first(B);
       {next, T, A2} ->
         {next, T, append(A2, B)}
     end

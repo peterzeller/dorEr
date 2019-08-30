@@ -5,7 +5,7 @@
 -endif.
 
 
--export([group_by_first/1, group_by/2, group_by/4, reduce/2, topsort/2, is_prefix/2, with_index/1, iterate/2, pick_most_similar/2, confuse_dialyzer/1, loop/2]).
+-export([group_by_first/1, group_by/2, group_by/4, reduce/2, topsort/2, is_prefix/2, with_index/1, iterate/2, pick_most_similar/2, confuse_dialyzer/1, loop/2, limit/2]).
 
 
 %% groups a list of key-value pairs by key
@@ -32,8 +32,8 @@ group_by(F, Init, Merge, List) ->
 
 
 -spec reduce(fun((E, E) -> E), [E]) -> E.
-reduce(_, [])          -> throw('cannot reduce empty list');
-reduce(_, [X])         -> X;
+reduce(_, []) -> throw('cannot reduce empty list');
+reduce(_, [X]) -> X;
 reduce(M, [X, Y | Xs]) -> reduce(M, [M(X, Y) | Xs]).
 
 
@@ -53,7 +53,7 @@ topsort(Cmp, Xs) ->
 is_prefix([], _) -> true;
 is_prefix([X | Xs], [X | Ys]) ->
   is_prefix(Xs, Ys);
-is_prefix(_, _)  -> false.
+is_prefix(_, _) -> false.
 
 -spec with_index([T]) -> [{non_neg_integer(), T}].
 with_index(List) ->
@@ -75,13 +75,22 @@ loop(Start, Fun) ->
     {continue, X} -> loop(X, Fun)
   end.
 
+-spec limit(integer(), [T]) -> [T].
+limit(N, [X | Xs]) when N > 0 ->
+  [X | limit(N - 1, Xs)];
+limit(_, _) -> [].
+
 
 
 pick_most_similar(_Elem, []) -> throw('no choices available');
 pick_most_similar(Elem, List) ->
-  WithSimilarity = [{similarity(Elem, X), X} || X <- List],
-  {_, Res} = lists:max(WithSimilarity),
-  {ok, Res}.
+  case lists:member(Elem, List) of
+    true -> Elem;
+    false ->
+      WithSimilarity = [{similarity(Elem, X), X} || X <- List],
+      {_, Res} = lists:max(WithSimilarity),
+      Res
+  end.
 
 
 similarity(X, X) -> 1;
@@ -96,7 +105,7 @@ similarity(X, Y) when is_list(X) andalso is_list(Y) ->
       1 / (1 + L) + similarity(As, Bs) * L / (1 + L);
     {[A | As], Xs} ->
       L = max(1 + length(As), length(Xs)),
-      {ok, Sim} = pick_most_similar(A, Xs),
+      Sim = pick_most_similar(A, Xs),
       similarity(A, Sim) / L + similarity(As, Xs -- [Sim]) * (L - 1) / L
   end;
 similarity(X, Y) when is_tuple(X) andalso is_tuple(Y) ->
