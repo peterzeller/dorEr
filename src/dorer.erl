@@ -8,6 +8,13 @@
 strategy => strategy()
 }.
 
+-type error_data() :: #{
+exception := any(),
+stacktrace := any(),
+log := any(),
+gen := any()
+}.
+
 check(Fun) ->
   check(#{}, Fun).
 
@@ -42,6 +49,7 @@ check_random(Options, Fun) ->
     N = maps:get(n, Options, 100),
     Result =
       find_error(N, fun(I) ->
+        print("."),
         dorer_server:call({init, I}),
         run_fun(Fun)
       end),
@@ -49,7 +57,7 @@ check_random(Options, Fun) ->
     ShrinkResult = case Result of
       ok -> ok;
       {error, Data} ->
-        print("Found a problem: ~n~n", []),
+        print("~n~nFound a problem: ~n~n", []),
         show_result_data(Data, false),
         print("Trying to shrink counter example ... ~n~n", []),
         shrink_random_execution(Options, Data, Fun)
@@ -74,15 +82,17 @@ check_random(Options, Fun) ->
 show_result_data(Data, Rethrow) ->
   print_generated_values(Data),
   print_log(Data),
+
   Exception = maps:get(exception, Data),
-  case Rethrow of
+  Stacktrace = maps:get(stacktrace, Data),
+  case dorer_list_utils:confuse_dialyzer(Rethrow) of
     true ->
       case Exception of
         {error, E} ->
-          erlang:error(E);
-        {_, E} ->
-          print("~nException ~p~n ~p", [E, maps:get(stacktrace, Data)]),
-          throw(E)
+          erlang:error({E, Stacktrace});
+        {K, E} ->
+          print("~nException ~p~n ~p", [E, Stacktrace]),
+          throw({K, E, Stacktrace})
       end;
     false ->
       {K, E} = Exception,
@@ -93,8 +103,9 @@ print_generated_values(Data) ->
   print("~nGenerated Values:~n"),
   lists:foreach(fun
     ({N, G, V}) ->
-      print(" ~p: ~p => ~p~n", [N, maps:get(name, G), V])
-  end, maps:get(gen, Data)).
+      print(" ~p: ~p => ~p~n", [N, dorer_generators:name(G), dorer_generators:remove_metadata(G, V)])
+  end, maps:get(gen, Data)),
+  print("~n").
 
 print_log(Data) ->
   print("~nLOG:~n", []),
@@ -104,7 +115,8 @@ print_log(Data) ->
         true -> print(" ~s~n", [L]);
         false -> print(" ~p~n", [L])
       end
-  end, maps:get(log, Data)).
+  end, maps:get(log, Data)),
+  print("~n").
 
 check_small(_Options, _Fun) ->
   erlang:error(not_implemented).
@@ -143,7 +155,7 @@ gen(Name, Generator) ->
 shrink_random_execution(Options, Data, Fun) ->
   Generated1 = maps:get(gen, Data),
   % remove special 'is_more' generator
-  Generated = lists:filter(fun({_Name, Gen, _Value}) -> maps:get(name, Gen) /= has_more end, Generated1),
+  Generated = lists:filter(fun({_Name, Gen, _Value}) -> dorer_generators:name(Gen) /= has_more end, Generated1),
   ByName = dorer_list_utils:group_by(fun({Name, _Gen, _Value}) -> Name end, Generated),
   Names = maps:keys(ByName),
   ShrinksByName = dorer_lazyseq:flatmap(fun(Name) ->
@@ -174,22 +186,41 @@ shrink_random_execution(Options, Data, Fun) ->
   end.
 
 
--spec lazyseq_find_error(fun((T) -> ok | X), dorer_lazyseq:seq(T)) -> ok | X.
+-spec lazyseq_find_error(fun((T) -> ok | {error, error_data()}), dorer_lazyseq:seq(T)) -> ok | {error, error_data()}.
 lazyseq_find_error(Fun, Seq) ->
   case dorer_lazyseq:remove_first(Seq) of
     eof -> ok;
     {next, X, Rest} ->
       case Fun(X) of
         ok -> lazyseq_find_error(Fun, Rest);
-        Err -> Err
+        {error, Data} ->
+          Err = maps:get(exception, Data),
+          case is_dorer_error(Err) of
+            true ->
+              lazyseq_find_error(Fun, Rest);
+            false ->
+              {error, Data}
+          end
       end
   end.
+
+is_dorer_error({throw, Err}) ->
+  is_dorer_error(Err);
+is_dorer_error({throw, Err, _}) ->
+  is_dorer_error(Err);
+is_dorer_error({error, Err}) ->
+  is_dorer_error(Err);
+is_dorer_error({dorer_replay_error, _}) ->
+  true;
+is_dorer_error(_) ->
+  false.
 
 print(Msg) ->
   print(Msg, []).
 print(Msg, Args) ->
+  UserPid = whereis(user),
   case group_leader() of
-    user -> ok;
+    UserPid -> ok;
     _Other -> io:format(user, Msg, Args)
   end,
   io:format(Msg, Args).

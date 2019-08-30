@@ -5,7 +5,7 @@
 -endif.
 
 
--export([group_by_first/1, group_by/2, group_by/4, reduce/2, topsort/2, is_prefix/2, with_index/1, iterate/2, pick_most_similar/2]).
+-export([group_by_first/1, group_by/2, group_by/4, reduce/2, topsort/2, is_prefix/2, with_index/1, iterate/2, pick_most_similar/2, confuse_dialyzer/1, loop/2]).
 
 
 %% groups a list of key-value pairs by key
@@ -68,6 +68,14 @@ iterate(Start, Fun) ->
   end.
 
 
+-spec loop(T, fun((T) -> {return, X} | {continue, T})) -> X.
+loop(Start, Fun) ->
+  case Fun(Start) of
+    {return, X} -> X;
+    {continue, X} -> loop(X, Fun)
+  end.
+
+
 
 pick_most_similar(_Elem, []) -> throw('no choices available');
 pick_most_similar(Elem, List) ->
@@ -96,6 +104,11 @@ similarity(X, Y) when is_tuple(X) andalso is_tuple(Y) ->
 similarity(X, Y) when is_map(X) andalso is_map(Y) ->
   0.5 + similarity(maps:to_list(X), maps:to_list(Y)) * 0.5;
 similarity(_, _) -> 0.
+
+
+% the identitiy function to confuse dialyzer in case of false positives
+-spec confuse_dialyzer(T) -> T.
+confuse_dialyzer(X) -> X.
 
 
 -ifdef(TEST).

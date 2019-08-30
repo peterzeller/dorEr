@@ -5,39 +5,60 @@
 -endif.
 
 %% API
--export([integer/0, list/1, random_gen/2, shrinks/2, has_more/0, shrink_list/2, try_adapt_value/2, oneof/1, range/2, frequency/1, frequency_gen/1]).
+-export([integer/0, list/1, random_gen/2, shrinks/2, has_more/0, shrink_list/2, try_adapt_value/2, oneof/1, range/2, frequency/1, frequency_gen/1, map/2, set/1, name/1, transform/2, such_that/2, remove_metadata/2]).
 
--type random_gen(T) :: #{
-produce := fun((Size :: integer()) -> T),
-shrink := shrinker(T),
-try_adapt := fun((T) -> T)
+-export_type([generator/1, random_gen/1]).
+
+-record(random_gen, {
+  produce :: fun((Size :: integer()) -> any()),
+  remove_metadata :: fun((any()) -> any()),
+  shrink :: shrinker(any()),
+  try_adapt :: fun((any()) -> any())
+}).
+
+-opaque random_gen(T) :: #random_gen{
+produce :: fun((Size :: integer()) -> T2),
+remove_metadata :: fun((T2) -> T),
+shrink :: shrinker(T2),
+try_adapt :: fun((T2) -> T2)
 }.
+
 
 -type generator_name() :: atom() | {atom(), [generator_name()]}.
 
 -type shrinker(T) :: fun((T) -> dorer_lazyseq:seq(T)).
 
--type generator(T) :: #{
-name := generator_name(),
-random_gen => random_gen(T),
-small_gen => fun((Bound :: integer()) -> dorer_lazyseq:seq(T))
+-record(generator, {
+  name :: generator_name(),
+  random_gen :: undefined | random_gen(any()),
+  small_gen :: undefined | small_gen(any())
+}).
+
+-type small_gen(T) :: fun((Bound :: integer()) -> dorer_lazyseq:seq(T)).
+
+-opaque generator(T) :: #generator{
+random_gen :: undefined | random_gen(T),
+small_gen :: undefined | small_gen(T)
 }.
+
+
 
 -type generator_ext(T) :: generator(T) | any().
 
 
 -spec integer() -> generator(integer()).
 integer() ->
-  #{
-    name => integer,
-    random_gen => #{
-      produce => fun(Size) ->
+  #generator{
+    name = integer,
+    random_gen = #random_gen{
+      produce = fun(Size) ->
         rand:uniform(2 * Size) - Size
       end,
-      shrink => fun shrink_int/1,
-      try_adapt => fun(T) when is_integer(T) -> T end
+      remove_metadata = fun identity/1,
+      shrink = fun shrink_int/1,
+      try_adapt = fun(T) when is_integer(T) -> T end
     },
-    small_gen => fun(Bound) ->
+    small_gen = fun(Bound) ->
       dorer_lazyseq:iterate(0, fun
         (0) -> {next, 0, 1};
         (S) when S < Bound -> {nexts, [S, -S], S + 1};
@@ -48,18 +69,19 @@ integer() ->
 
 -spec range(integer(), integer()) -> generator(integer()).
 range(Min, Max) when Max >= Min ->
-  #{
-    name => range,
-    random_gen => #{
-      produce => fun(Size) ->
+  #generator{
+    name = range,
+    random_gen = #random_gen{
+      produce = fun(Size) ->
         rand:uniform(min(1 + Max - Min, Size)) + Min - 1
       end,
-      shrink => fun(X) ->
+      remove_metadata = fun identity/1,
+      shrink = fun(X) ->
         dorer_lazyseq:map(fun(A) -> A + Min end, shrink_int(X - Min))
       end,
-      try_adapt => fun(T) when T >= Min andalso T =< Max -> T end
+      try_adapt = fun(T) when T >= Min andalso T =< Max -> T end
     },
-    small_gen => fun(Bound) ->
+    small_gen = fun(Bound) ->
       dorer_lazyseq:iterate(Min, fun
         (S) when S =< Max andalso S - Min =< Bound -> {next, S, S + 1};
         (_) -> eof
@@ -76,30 +98,55 @@ shrink_int(X) ->
 
 -spec list(generator(T)) -> generator(list(T)).
 list(ItemGen) ->
-  #{
-    name => {list, [maps:get(name, ItemGen)]},
-    random_gen => #{
-      produce => fun(Size) -> produce_list(ItemGen, Size) end,
-      shrink => fun(List) -> shrink_list(shrinker(ItemGen), List) end,
-      try_adapt => fun(List) when is_list(List) ->
+  #generator{
+    name = {list, [name(ItemGen)]},
+    random_gen = #random_gen{
+      produce = fun(Size) -> produce_list(ItemGen, Size) end,
+      remove_metadata = fun(List) -> lists:map(fun(X) -> remove_metadata(ItemGen, X) end, List) end,
+      shrink = fun(List) -> shrink_list(shrinker(ItemGen), List) end,
+      try_adapt = fun(List) when is_list(List) ->
         [try_adapt_value(ItemGen, V) || V <- List]
+      end
+    }
+  }.
+
+-spec set(generator(T)) -> generator(ordsets:ordset(T)).
+set(ItemGen) ->
+  #generator{
+    name = {set, [name(ItemGen)]},
+    random_gen = #random_gen{
+      produce = fun(Size) ->
+        Elems = remove_duplicates_twice(lists:sort(produce_list(ItemGen, Size))),
+        ordsets:from_list(Elems)
+      end,
+      remove_metadata = fun(List) -> lists:map(fun(X) -> remove_metadata(ItemGen, X) end, List) end,
+      shrink = fun(Elem) ->
+        dorer_lazyseq:map(fun ordsets:from_list/1,
+          shrink_list(shrinker(ItemGen), Elem))
+      end,
+      try_adapt = fun(Set) when is_list(Set) ->
+        ordsets:from_list(lists:map(fun(E) -> try_adapt_value(ItemGen, E) end, Set))
       end
     }
   }.
 
 -spec map(generator(K), generator(V)) -> generator(#{K => V}).
 map(KeyGen, ValueGen) ->
-  #{
-    name => {list, [maps:get(name, KeyGen), maps:get(name, ValueGen)]},
-    random_gen => #{
-      produce => fun(Size) ->
+  #generator{
+    name = {list, [name(KeyGen), name(ValueGen)]},
+    random_gen = #random_gen{
+      produce = fun(Size) ->
         Keys = remove_duplicates_twice(lists:sort(produce_list(KeyGen, Size))),
         maps:from_list([{K, random_gen(ValueGen, Size - 1)} || K <- Keys])
       end,
-      shrink => fun(Elem) ->
-        maps:from_list(shrink_list(tuple_shrinker({KeyGen, ValueGen}), maps:to_list(Elem)))
+      remove_metadata = fun(Map) ->
+        maps:from_list(
+          lists:map(fun({K, V}) -> {remove_metadata(KeyGen, K), remove_metadata(ValueGen, V)} end, maps:to_list(Map)))
       end,
-      try_adapt => fun(Map) when is_map(Map) ->
+      shrink = fun(Elem) ->
+        dorer_lazyseq:map(fun maps:from_list/1, shrink_list(tuple_shrinker({KeyGen, ValueGen}), maps:to_list(Elem)))
+      end,
+      try_adapt = fun(Map) when is_map(Map) ->
         maps:from_list([{try_adapt_value(KeyGen, K), try_adapt_value(ValueGen, V)} || {K, V} <- maps:to_list(Map)])
       end
     }
@@ -113,10 +160,10 @@ remove_duplicates_twice([X | Xs]) ->
 
 -spec oneof([T]) -> generator(T).
 oneof(Choices) ->
-  #{
-    name => oneof,
-    random_gen => #{
-      prodce => fun(Size) ->
+  #generator{
+    name = oneof,
+    random_gen = #random_gen{
+      produce = fun(Size) ->
         case length(Choices) of
           0 ->
             throw('Could not generate a choice, because the list is empty');
@@ -125,10 +172,11 @@ oneof(Choices) ->
             lists:nth(I, Choices)
         end
       end,
-      shrink => fun(Elem) ->
+      remove_metadata = fun identity/1,
+      shrink = fun(Elem) ->
         shrink_oneof(Elem, Choices)
       end,
-      try_adapt => fun(Elem) ->
+      try_adapt = fun(Elem) ->
         dorer_list_utils:pick_most_similar(Elem, Choices)
       end
     }
@@ -137,17 +185,19 @@ oneof(Choices) ->
 -spec frequency([{integer(), T}]) -> generator(T).
 frequency(Choices) ->
   Sum = lists:sum([F || {F, _} <- Choices]),
-  #{
-    name => frequency,
-    random_gen => #{
-      prodce => fun(_Size) ->
+  #generator{
+    name = frequency,
+    random_gen = #random_gen{
+      produce = fun(_Size) ->
         I = rand:uniform(Sum),
-        pick_from_frequencies(I, Choices)
+        {_Pos, Elem} = pick_from_frequencies(I, Choices),
+        Elem
       end,
-      shrink => fun(Elem) ->
+      remove_metadata = fun identity/1,
+      shrink = fun(Elem) ->
         shrink_oneof(Elem, [C || {_, C} <- Choices])
       end,
-      try_adapt => fun(Elem) ->
+      try_adapt = fun(Elem) ->
         dorer_list_utils:pick_most_similar(Elem, [C || {_, C} <- Choices])
       end
     }
@@ -156,46 +206,90 @@ frequency(Choices) ->
 -spec frequency_gen([generator_ext(T)]) -> generator(T).
 frequency_gen(Choices) ->
   Sum = lists:sum([F || {F, _} <- Choices]),
-  #{
-    name => frequency,
-    random_gen => #{
-      prodce => fun(Size) ->
+  #generator{
+    name = frequency_gen,
+    random_gen = #random_gen{
+      produce = fun(Size) ->
         I = rand:uniform(Sum),
-        CGen = pick_from_frequencies(I, Choices),
-        random_gen(CGen, Size)
+        {Pos, CGen} = pick_from_frequencies(I, Choices),
+        true = is_integer(Pos),
+        {Pos, random_gen(CGen, Size)}
       end,
-      shrink => fun(Elem) ->
-        dorer_lazyseq:flatmap(fun(CGen) ->
-          try
-            A = try_adapt_value(CGen, Elem),
-            shrinks(CGen, A)
-          catch
-            _:_:_ -> []
-          end
-        end, [C || {_, C} <- Choices])
+      remove_metadata = fun({Pos, X}) ->
+        {_F, CGen} = lists:nth(Pos, Choices),
+        remove_metadata(CGen, X)
       end,
-      try_adapt => fun(Elem) ->
-        pick_first_without_exception(fun(CGen) -> try_adapt_value(CGen, Elem) end, [C || {_, C} <- Choices])
+      shrink = fun({Pos, X}) ->
+        {_F, CGen} = lists:nth(Pos, Choices),
+        dorer_lazyseq:map(fun(A) -> {Pos, A} end, shrinks(CGen, X))
+      end,
+      try_adapt = fun({Pos, X}) ->
+        {_F, CGen} = lists:nth(Pos, Choices),
+        {Pos, try_adapt_value(CGen, X)}
       end
     }
   }.
 
 
-pick_first_without_exception(_, []) -> throw('no element could be adapted');
-pick_first_without_exception(F, [X]) -> F(X);
-pick_first_without_exception(F, [X | Xs]) ->
-  try
-    F(X)
-  catch
-    _:_:_ ->
-      pick_first_without_exception(F, Xs)
-  end.
+-spec transform(generator(T), fun((T) -> S)) -> generator(S).
+transform(Gen, F) ->
+  #generator{
+    name = {transform, [name(Gen)]},
+    random_gen = #random_gen{
+      produce = fun(Size) ->
+        X = random_gen(Gen, Size),
+        {X, F(X)}
+      end,
+      remove_metadata = fun({_O, T}) -> T end,
+      shrink = fun({O, _T}) ->
+        dorer_lazyseq:map(F, shrinks(Gen, O))
+      end,
+      try_adapt = fun({O, _T}) ->
+        F(try_adapt_value(Gen, O))
+      end
+    }
+  }.
 
-pick_from_frequencies(_, [{_, X}]) -> X;
+-spec such_that(generator(T), fun((T) -> boolean())) -> generator(T).
+such_that(Gen, Pred) ->
+  #generator{
+    name = {such_that, [name(Gen)]},
+    random_gen = #random_gen{
+      produce = fun(Size) ->
+        dorer_list_utils:loop(0, fun(I) ->
+          if
+            I > 1000 ->
+              throw({'could not generate value'});
+            true ->
+              X = random_gen(Gen, Size + I),
+              case Pred(X) of
+                true -> {return, X};
+                false -> {continue, I + 1}
+              end
+          end
+        end)
+      end,
+      remove_metadata = fun identity/1,
+      shrink = fun(X) ->
+        dorer_lazyseq:filter(Pred, shrinks(Gen, X))
+      end,
+      try_adapt = fun(O) ->
+        X = try_adapt_value(Gen, O),
+        true = Pred(X),
+        X
+      end
+    }
+  }.
+
+
+-spec pick_from_frequencies(non_neg_integer(), list({_,X})) -> {non_neg_integer(), X}.
+pick_from_frequencies(_, [{_, X}]) -> {1, X};
 pick_from_frequencies(I, [{F, X} | Rest]) ->
   if
-    F > 0 andalso I =< F -> X;
-    true -> pick_from_frequencies(I - F, Rest)
+    F > 0 andalso I =< F -> {1, X};
+    true ->
+      {Pos, Res} = pick_from_frequencies(I - F, Rest),
+      {Pos + 1, Res}
   end.
 
 
@@ -243,19 +337,20 @@ shrink_list(ItemShrinker, List) ->
 % Generates a boolean, false with probability 1/size
 -spec has_more() -> generator(boolean()).
 has_more() ->
-  #{
-    name => has_more,
-    random_gen => #{
-      produce => fun(Size) ->
+  #generator{
+    name = has_more,
+    random_gen = #random_gen{
+      produce = fun(Size) ->
         rand:uniform(Size) > 1
       end,
-      shrink => fun
+      remove_metadata = fun identity/1,
+      shrink = fun
         (true) -> [false];
         (false) -> []
       end,
-      try_adapt => fun(X) when is_boolean(X) -> X end
+      try_adapt = fun(X) when is_boolean(X) -> X end
     },
-    small_gen => fun(Bound) ->
+    small_gen = fun(Bound) ->
       case Bound =< 0 of
         true -> [false];
         false -> [false, true]
@@ -274,8 +369,8 @@ produce_list(ItemGen, N) ->
 
 
 -spec random_gen(generator_ext(T), non_neg_integer()) -> T.
-random_gen(Generator = #{name := _}, Size) ->
-  #{random_gen := #{produce := Produce}} = Generator,
+random_gen(Generator = #generator{}, Size) ->
+  Produce = Generator#generator.random_gen#random_gen.produce,
   Produce(Size);
 random_gen(Tuple, Size) when is_tuple(Tuple) ->
   list_to_tuple([random_gen(E, Size) || E <- tuple_to_list(Tuple)]);
@@ -285,11 +380,16 @@ random_gen(Elem, _Size) ->
 
 -spec shrinks(generator(T), T) -> dorer_lazyseq:seq(T).
 shrinks(Generator, X) ->
-  (shrinker(Generator))(X).
+  try
+    (shrinker(Generator))(X)
+  catch
+    T:E:S ->
+      throw({'error trying to shrink', name(Generator), X, {T, E, S}})
+  end .
 
 -spec shrinker(generator(T)) -> shrinker(T).
-shrinker(Generator = #{name := _}) ->
-  #{random_gen := #{shrink := Shrink}} = Generator,
+shrinker(Generator = #generator{}) ->
+  #generator{random_gen = #random_gen{shrink = Shrink}} = Generator,
   Shrink;
 shrinker(TupleGen) when is_tuple(TupleGen) ->
   tuple_shrinker(TupleGen);
@@ -325,13 +425,34 @@ tuple_shrinker(TupleGen) ->
 % adapts the value or throws {dorer_replay_error, _} if not
 -spec try_adapt_value(generator(T), T) -> T.
 try_adapt_value(Generator, Value) ->
-  #{random_gen := #{try_adapt := Adapt}} = Generator,
+  #generator{random_gen = #random_gen{try_adapt = Adapt}} = Generator,
   try Adapt(Value)
   catch
-    T:E:S -> {dorer_replay_error, {'could not adapt value', Value, {T, E, S}}}
+    T:E:S -> throw({dorer_replay_error, {'could not adapt value', Value, {T, E, S}}})
   end.
 
+-spec name(generator(any())) -> generator_name().
+name(Gen) ->
+  Gen#generator.name.
 
+
+identity(X) -> X.
+
+
+-spec remove_metadata(generator_ext(T), any()) -> T.
+remove_metadata(Gen = #generator{}, X) ->
+  RemoveMetadata = Gen#generator.random_gen#random_gen.remove_metadata,
+  try
+    RemoveMetadata(X)
+  catch
+    T:E:S ->
+      throw({dorer_replay_error, {'could not remove metadata', name(Gen), X, {T, E, S}}})
+  end;
+remove_metadata(TupleGen, Tuple) when is_tuple(TupleGen)->
+  list_to_tuple(
+    [remove_metadata(Gen, Elem) || {Gen, Elem} <- lists:zip(tuple_to_list(TupleGen), tuple_to_list(Tuple))]
+  );
+remove_metadata(X, X) -> X.
 
 
 -ifdef(TEST).
@@ -425,10 +546,59 @@ shrink_tuple_test() ->
     {ok, 17, 33, 59}],
     dorer_lazyseq:to_list(shrinks({ok, range(10, 20), range(30, 40), range(50, 60)}, {ok, 17, 33, 60}))).
 
+shrink_list3_test() ->
+  ?assertEqual([
+    [5, 7],
+    [1, 7],
+    [1, 5],
+    [0, 5, 7],
+    [1, 0, 7],
+    [1, 5, 0],
+    [1, 3, 7],
+    [1, 5, 4],
+    [1, 4, 7],
+    [1, 5, 6]],
+    dorer_lazyseq:to_list(shrinks(list(integer()), [1, 5, 7]))).
+
+shrink_set_test() ->
+  ?assertEqual([
+    [5, 7],
+    [1, 7],
+    [1, 5],
+    [0, 5, 7],
+    [0, 1, 7],
+    [0, 1, 5],
+    [1, 3, 7],
+    [1, 4, 5],
+    [1, 4, 7],
+    [1, 5, 6]],
+    dorer_lazyseq:to_list(shrinks(set(integer()), [1, 5, 7]))).
+
+shrink_map_test() ->
+  ?assertEqual(
+    [#{b => 2, d => 5},
+      #{a => 10, d => 5},
+      #{a => 10, b => 2},
+      #{a => 0, b => 2, d => 5},
+      #{a => 2, d => 5},
+      #{a => 5, b => 2},
+      #{a => 5, b => 2, d => 5},
+      #{a => 10, b => 0, d => 5},
+      #{a => 10, b => 2, d => 0},
+      #{a => 8, b => 2, d => 5},
+      #{a => 10, b => 1, d => 5},
+      #{a => 10, b => 5},
+      #{a => 9, b => 2, d => 5},
+      #{a => 10, b => 2, d => 3},
+      #{a => 10, b => 2, c => 5},
+      #{a => 10, b => 2, d => 4}],
+    dorer_lazyseq:to_list(shrinks(map(oneof([a, b, c, d]), integer()), #{a => 10, b => 2, d => 5}))).
 
 remove_duplicates_twice_test() ->
   ?assertEqual([a, c], remove_duplicates_twice(lists:sort([a, b, c, a, b, b, a, b]))).
 
 -endif.
+
+
 
 

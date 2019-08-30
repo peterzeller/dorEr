@@ -43,3 +43,4 @@ simple2_test(_Config) ->
         ?assertEqual(lists:last(lists:sort(List)), biggest(List))
     end
   end).
+

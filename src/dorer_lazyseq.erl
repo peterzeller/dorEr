@@ -1,7 +1,7 @@
 -module(dorer_lazyseq).
 
 
--export([empty/0, append/2, from_list/1, iterate/2, remove_first/1, map/2, flatmap/2, append/1, to_list/1]).
+-export([empty/0, append/2, from_list/1, iterate/2, remove_first/1, map/2, flatmap/2, append/1, to_list/1, filter/2]).
 
 -export_type([seq/1]).
 
@@ -16,7 +16,7 @@ empty() ->
 -spec append([seq(T)]) -> seq(T).
 append([]) -> [];
 append([X]) -> X;
-append([X|Xs]) -> append(X, append(Xs)).
+append([X | Xs]) -> append(X, append(Xs)).
 
 -spec append(seq(T), seq(T)) -> seq(T).
 append(A, B) ->
@@ -52,7 +52,7 @@ to_list(L) ->
   case remove_first(L) of
     eof -> [];
     {next, X, Rest} ->
-      [X|to_list(Rest)]
+      [X | to_list(Rest)]
   end.
 
 -spec remove_first(seq(T)) -> eof | {next, T, seq(T)}.
@@ -68,6 +68,16 @@ map(F, Seq) ->
       eof -> eof;
       {next, X, Rest} ->
         {next, F(X), map(F, Rest)}
+    end
+  end.
+
+-spec filter(fun((A) -> boolean()), seq(A)) -> seq(A).
+filter(Pred, Seq) ->
+  fun() ->
+    case remove_first(Seq) of
+      eof -> eof;
+      {next, X, Rest} ->
+        {nexts, [X || Pred(X)], filter(Pred, Rest)}
     end
   end.
 

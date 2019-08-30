@@ -44,7 +44,11 @@ stop() ->
 
 
 call(Request) ->
-  gen_server:call(?MODULE, Request).
+  case gen_server:call(?MODULE, Request) of
+    {ok, Res} -> Res;
+    ok -> ok;
+    Error -> throw(Error)
+  end.
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -65,7 +69,6 @@ call(Request) ->
   {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
   {stop, Reason :: term()} | ignore).
 init([Options]) ->
-  io:format(user, "Initializing Dorer Server~n", []),
   rand:seed(exsplus, {47, 1, 1}),
   {ok, #state{
     options = Options,
@@ -88,35 +91,49 @@ init([Options]) ->
   {noreply, NewState :: #state{}, timeout() | hibernate} |
   {stop, Reason :: term(), Reply :: term(), NewState :: #state{}} |
   {stop, Reason :: term(), NewState :: #state{}}).
-handle_call({generate, Name, Gen}, _From, State) ->
-  {Res, State2} = case State#state.replay_gen of
+handle_call(Req, _From, State) ->
+  try
+    handle_call2(Req, State)
+  catch
+    T:E:S ->
+      {reply, {error, {T, E, S}}, State}
+  end.
+
+handle_call2({generate, Name, Gen}, State) ->
+  RS = case State#state.replay_gen of
     undefined ->
-      R = dorer_generators:random_gen(Gen, State#state.size),
-      {R, State};
+      RM = dorer_generators:random_gen(Gen, State#state.size),
+      {ok, RM, State};
     ReplayGen ->
-      case maps:get(name, Gen) of
+      case dorer_generators:name(Gen) of
         has_more ->
           R = lists:any(fun
             ({Name2, _, _}) -> dorer_list_utils:is_prefix(Name, Name2)
           end, ReplayGen),
-          {R, State};
+          {ok, R, State};
         _ ->
-          case lists:search(fun({Name2, Gen2, _Val}) -> Name == Name2 andalso maps:get(name, Gen) == maps:get(name, Gen2) end, ReplayGen) of
+          case lists:search(fun({Name2, Gen2, _Val}) -> Name == Name2 andalso dorer_generators:name(Gen) == dorer_generators:name(Gen2) end, ReplayGen) of
             {value, X = {_Name2, _Gen2, Val}} ->
-              R = dorer_generators:try_adapt_value(Gen, Val),
+              RM = dorer_generators:try_adapt_value(Gen, Val),
               S2 = State#state{
                 replay_gen = ReplayGen -- [X]
               },
-              {R, S2};
+              {ok, RM, S2};
             false ->
-              throw({dorer_replay_error, {'could not find value for', Name}})
+              {error, {dorer_replay_error, {'could not find value for', Name}}}
           end
       end
   end,
-  {reply, Res, State2#state{
-    generated_values = [{Name, Gen, Res} | State#state.generated_values]
-  }};
-handle_call({init, I}, _From, State) ->
+  case RS of
+    {ok, ResM, State2} ->
+      Res = dorer_generators:remove_metadata(Gen, ResM),
+      {reply, {ok, Res}, State2#state{
+        generated_values = [{Name, Gen, ResM} | State#state.generated_values]
+      }};
+    {error, Reason} ->
+      {reply, {error, Reason}, State}
+  end;
+handle_call2({init, I}, State) ->
   NewState = State#state{
     log              = [],
     generated_values = [],
@@ -124,21 +141,21 @@ handle_call({init, I}, _From, State) ->
     replay_gen       = undefined
   },
   {reply, ok, NewState};
-handle_call({init_replay, GeneratedS}, _From, State) when is_list(GeneratedS) ->
+handle_call2({init_replay, GeneratedS}, State) when is_list(GeneratedS) ->
   NewState = State#state{
     log              = [],
     generated_values = [],
     replay_gen       = GeneratedS
   },
   {reply, ok, NewState};
-handle_call(get_log, _From, State) ->
-  {reply, lists:reverse(State#state.log), State};
-handle_call(get_generated_values, _From, State) ->
-  {reply, lists:reverse(State#state.generated_values), State};
-handle_call({log, Message}, _From, State) ->
+handle_call2(get_log, State) ->
+  {reply, {ok, lists:reverse(State#state.log)}, State};
+handle_call2(get_generated_values, State) ->
+  {reply, {ok, lists:reverse(State#state.generated_values)}, State};
+handle_call2({log, Message}, State) ->
   {reply, ok, State#state{log = [Message | State#state.log]}};
-handle_call(Request, _From, _State) ->
-  throw({unhandled_request, Request}).
+handle_call2(Request, State) ->
+  {reply, {unhandled_request, Request}, State}.
 
 %%--------------------------------------------------------------------
 %% @private
