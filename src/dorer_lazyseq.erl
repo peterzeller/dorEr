@@ -88,10 +88,6 @@ flatmap(F, Seq) ->
       eof -> eof;
       {next, X, Rest} ->
         M = F(X),
-        case remove_first(M) of
-          eof -> flatmap(F, Rest);
-          {next, MX, MRest} ->
-            {next, MX, append(MRest, flatmap(F, Rest))}
-        end
+        remove_first(append(M, flatmap(F, Rest)))
     end
   end.

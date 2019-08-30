@@ -70,10 +70,11 @@ call(Request) ->
   {stop, Reason :: term()} | ignore).
 init([Options]) ->
   rand:seed(exsplus, {47, 1, 1}),
+  process_flag(trap_exit, true),
   {ok, #state{
     options = Options,
-    mode    = maps:get(strategy, Options, random),
-    size    = 5
+    mode = maps:get(strategy, Options, random),
+    size = 5
   }}.
 
 %%--------------------------------------------------------------------
@@ -135,17 +136,17 @@ handle_call2({generate, Name, Gen}, State) ->
   end;
 handle_call2({init, I}, State) ->
   NewState = State#state{
-    log              = [],
+    log = [],
     generated_values = [],
-    size             = 1 + 1 * I,
-    replay_gen       = undefined
+    size = 1 + 1 * I,
+    replay_gen = undefined
   },
   {reply, ok, NewState};
 handle_call2({init_replay, GeneratedS}, State) when is_list(GeneratedS) ->
   NewState = State#state{
-    log              = [],
+    log = [],
     generated_values = [],
-    replay_gen       = GeneratedS
+    replay_gen = GeneratedS
   },
   {reply, ok, NewState};
 handle_call2(get_log, State) ->
@@ -185,7 +186,8 @@ handle_cast(_Request, State) ->
   {noreply, NewState :: #state{}} |
   {noreply, NewState :: #state{}, timeout() | hibernate} |
   {stop, Reason :: term(), NewState :: #state{}}).
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+  io:format(user, "~nUhandle_info~n Info = ~p~n State = ~p~n", [Info, State]),
   {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -201,7 +203,40 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec(terminate(Reason :: (normal | shutdown | {shutdown, term()} | term()),
   State :: #state{}) -> term()).
-terminate(_Reason, _State) ->
+terminate(normal, _State) ->
+  ok;
+terminate(Reason, State) ->
+  print("~nTerminating with reason ~p~n", [Reason]),
+
+  case State#state.replay_gen of
+    undefined -> ok;
+    List ->
+      print("~nCurrently Replaying Generated Values:~n"),
+      lists:foreach(fun
+        ({N, G, V}) ->
+          print(" ~p: ~p => ~p~n", [N, dorer_generators:name(G), dorer_generators:remove_metadata(G, V)])
+      end, List),
+      print("~n")
+  end,
+
+
+  print("~nGenerated Values:~n"),
+  lists:foreach(fun
+    ({N, G, V}) ->
+      print(" ~p: ~p => ~p~n", [N, dorer_generators:name(G), dorer_generators:remove_metadata(G, V)])
+  end, State#state.generated_values),
+  print("~n"),
+
+
+  print("~nLOG:~n", []),
+  lists:foreach(fun
+    (L) ->
+      case io_lib:char_list(L) of
+        true -> print(" ~s~n", [L]);
+        false -> print(" ~p~n", [L])
+      end
+  end, State#state.log),
+  print("~n"),
   ok.
 
 %%--------------------------------------------------------------------
@@ -221,3 +256,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+
+print(Msg) ->
+  print(Msg, []).
+print(Msg, Args) ->
+  io:format(user, Msg, Args).

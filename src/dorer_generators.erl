@@ -5,7 +5,7 @@
 -endif.
 
 %% API
--export([integer/0, list/1, random_gen/2, shrinks/2, has_more/0, shrink_list/2, try_adapt_value/2, oneof/1, range/2, frequency/1, frequency_gen/1, map/2, set/1, name/1, transform/2, such_that/2, remove_metadata/2]).
+-export([integer/0, list/1, random_gen/2, shrinks/2, has_more/0, shrink_list/2, try_adapt_value/2, oneof/1, range/2, frequency/1, frequency_gen/1, map/2, set/1, name/1, transform/2, such_that/2, remove_metadata/2, shrink_list_items/2]).
 
 -export_type([generator/1, random_gen/1]).
 
@@ -315,11 +315,15 @@ shrink_list(ItemShrinker, List) ->
       {A, [_ | B]} = lists:split(I, List),
       {next, A ++ B, I + 1}
   end),
+  OneShrunk = shrink_list_items(ItemShrinker, List),
+  dorer_lazyseq:append([HalfLists, OneRemoved, OneShrunk]).
+
+-spec shrink_list_items(shrinker(T), [T]) -> dorer_lazyseq:seq([T]).
+shrink_list_items(ItemShrinker, List) ->
   ItemShrinkers = lists:map(fun({I, X}) ->
     {A, [_ | B]} = lists:split(I, List),
     {I, ItemShrinker(X), A, B}
   end, dorer_list_utils:with_index(List)),
-
   OneShrunk = dorer_lazyseq:iterate(queue:from_list(ItemShrinkers), fun(Q) ->
     case queue:out(Q) of
       {empty, _} -> eof;
@@ -332,7 +336,7 @@ shrink_list(ItemShrinker, List) ->
         end
     end
   end),
-  dorer_lazyseq:append([HalfLists, OneRemoved, OneShrunk]).
+  OneShrunk.
 
 % Generates a boolean, false with probability 1/size
 -spec has_more() -> generator(boolean()).
@@ -482,6 +486,23 @@ shrink_list_test() ->
     [1, 2, 3, 3, 5],
     [1, 2, 3, 4, 4]],
     dorer_lazyseq:to_list(shrinks(Gen, [1, 2, 3, 4, 5]))).
+
+shrink_list_items_test() ->
+  Gen = list(integer()),
+  ?assertEqual([
+    [0, 2, 3, 4, 5],
+    [1, 0, 3, 4, 5],
+    [1, 2, 0, 4, 5],
+    [1, 2, 3, 0, 5],
+    [1, 2, 3, 4, 0],
+    [1, 1, 3, 4, 5],
+    [1, 2, 2, 4, 5],
+    [1, 2, 3, 2, 5],
+    [1, 2, 3, 4, 3],
+    [1, 2, 3, 3, 5],
+    [1, 2, 3, 4, 4]],
+    dorer_lazyseq:to_list(shrink_list_items(shrinker(integer()), [1, 2, 3, 4, 5]))).
+
 
 shrink_list2_test() ->
   Gen = list(integer()),

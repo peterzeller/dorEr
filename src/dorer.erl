@@ -15,11 +15,18 @@ log := any(),
 gen := any()
 }.
 
+default_options() -> #{
+  strategy => random,
+  max_shrink_time => {3, second}
+}.
+
 check(Fun) ->
   check(#{}, Fun).
 
 -spec check(options(), fun(() -> any())) -> ok.
-check(Options, Fun) ->
+check(Options1, Fun) ->
+  Options = maps:merge(default_options(), Options1),
+
   case maps:get(strategy, Options, random) of
     random -> check_random(Options, Fun);
     small -> check_small(Options, Fun)
@@ -60,7 +67,9 @@ check_random(Options, Fun) ->
         print("~n~nFound a problem: ~n~n", []),
         show_result_data(Data, false),
         print("Trying to shrink counter example ... ~n~n", []),
-        shrink_random_execution(Options, Data, Fun)
+        {MaxShrinkTime, MaxShrinkTimeUnit} = maps:get(max_shrink_time, Options, {20, second}),
+        ShrinkEndTime = erlang:system_time(MaxShrinkTimeUnit) + MaxShrinkTime,
+        shrink_random_execution(Options, Data, Fun, ShrinkEndTime, MaxShrinkTimeUnit)
     end,
 
     dorer_server:stop(),
@@ -70,7 +79,7 @@ check_random(Options, Fun) ->
     {result, P, Result} ->
       case Result of
         {error, Data} ->
-          print("Minimized Counter Example: ~n~n", []),
+          print("Minimized Counter Example (~p reductions): ~n~n", [maps:get(shrink_count, Data, 0)]),
           show_result_data(Data, true);
         _ ->
           Result
@@ -85,6 +94,8 @@ show_result_data(Data, Rethrow) ->
 
   Exception = maps:get(exception, Data),
   Stacktrace = maps:get(stacktrace, Data),
+  {K, E} = Exception,
+  print("ERROR ~p: ~p~n ~p~n", [K, E, maps:get(stacktrace, Data)]),
   case dorer_list_utils:confuse_dialyzer(Rethrow) of
     true ->
       case Exception of
@@ -95,8 +106,7 @@ show_result_data(Data, Rethrow) ->
           throw({K, E, Stacktrace})
       end;
     false ->
-      {K, E} = Exception,
-      print("ERROR ~p: ~p~n ~p~n", [K, E, maps:get(stacktrace, Data)])
+      ok
   end.
 
 print_generated_values(Data) ->
@@ -152,7 +162,7 @@ gen(Name, Generator) ->
 
 
 
-shrink_random_execution(Options, Data, Fun) ->
+shrink_random_execution(Options, Data, Fun, ShrinkEndTime, MaxShrinkTimeUnit) ->
   Generated1 = maps:get(gen, Data),
   % remove special 'is_more' generator
   Generated = lists:filter(fun({_Name, Gen, _Value}) -> dorer_generators:name(Gen) /= has_more end, Generated1),
@@ -160,9 +170,25 @@ shrink_random_execution(Options, Data, Fun) ->
   Names = maps:keys(ByName),
   ShrinksByName = dorer_lazyseq:flatmap(fun(Name) ->
     NGenerated = maps:get(Name, ByName),
-    Shrinks = dorer_generators:shrink_list(fun({Name2, Gen, Value}) ->
-      dorer_lazyseq:map(fun(V) -> {Name2, Gen, V} end, dorer_generators:shrinks(Gen, Value))
-    end, NGenerated),
+    Shrinks = case lists:any(fun({Name2, Gen, _Value}) ->
+      dorer_generators:name(Gen) == has_more
+        andalso dorer_list_utils:is_prefix(Name2, Name)
+    end, Generated1) of
+      true ->
+        % if there are has_more queries, then try to shrink the list:
+        dorer_generators:shrink_list(fun({Name2, Gen, Value}) ->
+          dorer_lazyseq:map(fun(V) -> {Name2, Gen, V} end, dorer_generators:shrinks(Gen, Value))
+        end, NGenerated);
+      false ->
+%%        print("NGenerated = ~p~n", [NGenerated]),
+        % otherwise, just try to shrink the list items:
+        S = dorer_generators:shrink_list_items(fun({Name2, Gen, Value}) ->
+          dorer_lazyseq:map(fun(V) -> {Name2, Gen, V} end, dorer_generators:shrinks(Gen, Value))
+        end, NGenerated),
+%%        print("NS = ~p~n", [dorer_lazyseq:to_list(S)]),
+        S
+    end,
+
     dorer_lazyseq:map(fun(S) ->
       M = maps:put(Name, S, ByName),
       lists:flatten(maps:values(M))
@@ -175,31 +201,43 @@ shrink_random_execution(Options, Data, Fun) ->
     Res
   end,
 
-  case lazyseq_find_error(Exec, ShrinksByName) of
+%%  print("ShrinksByName = ~p~n", [ShrinksByName]),
+%%  print("ShrinksByNameF = ~p~n", [ShrinksByName()]),
+%%  print("ShrinksByNameL = ~p~n", [dorer_lazyseq:to_list(ShrinksByName)]),
+
+  case lazyseq_find_error(Exec, ShrinksByName, ShrinkEndTime, MaxShrinkTimeUnit) of
     {error, SmallerData} ->
 %%      print("Found smaller example: ~n", []),
 %%      print_log(SmallerData),
-      shrink_random_execution(Options, SmallerData, Fun);
+      SmallerData2 = maps:update_with(shrink_count, fun(X) -> X + 1 end, 1, SmallerData),
+      shrink_random_execution(Options, SmallerData2, Fun, ShrinkEndTime, MaxShrinkTimeUnit);
     ok ->
       % no smaller execution found -> return original error and data
       {error, Data}
   end.
 
 
--spec lazyseq_find_error(fun((T) -> ok | {error, error_data()}), dorer_lazyseq:seq(T)) -> ok | {error, error_data()}.
-lazyseq_find_error(Fun, Seq) ->
-  case dorer_lazyseq:remove_first(Seq) of
-    eof -> ok;
-    {next, X, Rest} ->
-      case Fun(X) of
-        ok -> lazyseq_find_error(Fun, Rest);
-        {error, Data} ->
-          Err = maps:get(exception, Data),
-          case is_dorer_error(Err) of
-            true ->
-              lazyseq_find_error(Fun, Rest);
-            false ->
-              {error, Data}
+-spec lazyseq_find_error(fun((T) -> ok | {error, error_data()}), dorer_lazyseq:seq(T), integer(), erlang:time_unit()) -> ok | {error, error_data()}.
+lazyseq_find_error(Fun, Seq, ShrinkEndTime, TimeUnit) ->
+  CurrentTime = erlang:system_time(TimeUnit),
+  case CurrentTime > ShrinkEndTime of
+    true ->
+      print("~nCould not complete shrinking, because timeout was reached.~n"),
+      ok;
+    false ->
+      case dorer_lazyseq:remove_first(Seq) of
+        eof -> ok;
+        {next, X, Rest} ->
+          case Fun(X) of
+            ok -> lazyseq_find_error(Fun, Rest, ShrinkEndTime, TimeUnit);
+            {error, Data} ->
+              Err = maps:get(exception, Data),
+              case is_dorer_error(Err) of
+                true ->
+                  lazyseq_find_error(Fun, Rest, ShrinkEndTime, TimeUnit);
+                false ->
+                  {error, Data}
+              end
           end
       end
   end.
