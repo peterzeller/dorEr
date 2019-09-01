@@ -113,19 +113,8 @@ handle_call2({generate, Name, Gen}, State) ->
           end, ReplayGen),
           {ok, R, State};
         _ ->
-          case lists:search(fun({Name2, Gen2, _Val}) -> Name == Name2 andalso dorer_generators:name(Gen) == dorer_generators:name(Gen2) end, ReplayGen) of
-            {value, X = {_Name2, _Gen2, Val}} ->
-              RM = dorer_generators:try_adapt_value(Gen, Val),
-              S2 = State#state{
-                replay_gen = ReplayGen -- [X]
-              },
-              {ok, RM, S2};
-            false ->
-              % no recorded value found, generate a new one
-              RM = dorer_generators:random_gen(Gen, State#state.size),
-              {ok, RM, State}
-%%              {error, {dorer_replay_error, {'could not find value for', Name}}}
-          end
+          {ok, RM, ReplayGen2} = replay_value(Name, Gen, ReplayGen, State),
+          {ok, RM, State#state{replay_gen = ReplayGen2}}
       end
   end,
   case RS of
@@ -160,6 +149,25 @@ handle_call2({log, Message}, State) ->
   {reply, ok, State#state{log = [Message | State#state.log]}};
 handle_call2(Request, State) ->
   {reply, {unhandled_request, Request}, State}.
+
+replay_value(Name, Gen, ReplayGen, Size) ->
+  case lists:search(fun({Name2, Gen2, _Val}) ->
+    Name == Name2 andalso dorer_generators:name(Gen) == dorer_generators:name(Gen2) end, ReplayGen) of
+    {value, X = {_Name2, _Gen2, Val}} ->
+      ReplayGen2 = ReplayGen -- [X],
+      try RM = dorer_generators:try_adapt_value(Gen, Val),
+      {ok, RM, ReplayGen2}
+      catch
+        T:E:S ->
+          % try next value
+          replay_value(Name, Gen, ReplayGen2, Size)
+      end;
+    false ->
+      % no recorded value found, generate a new one
+      RM = dorer_generators:random_gen(Gen, Size),
+      {ok, RM, ReplayGen}
+%%              {error, {dorer_replay_error, {'could not find value for', Name}}}
+  end.
 
 %%--------------------------------------------------------------------
 %% @private
