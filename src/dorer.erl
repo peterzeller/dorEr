@@ -5,7 +5,10 @@
 -type strategy() :: small | random.
 
 -type options() :: #{
-strategy => strategy()
+strategy => strategy(),
+max_shrink_time => {pos_integer(), erlang:time_unit()},
+n => integer(),
+print_generated_values => boolean() | if_log_empty
 }.
 
 -type error_data() :: #{
