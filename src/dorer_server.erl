@@ -158,7 +158,7 @@ replay_value(Name, Gen, ReplayGen, Size) when is_integer(Size) ->
       try RM = dorer_generators:try_adapt_value(Gen, Val),
       {ok, RM, ReplayGen2}
       catch
-        T:E:S ->
+        _T:_E:_S ->
           % try next value
           replay_value(Name, Gen, ReplayGen2, Size)
       end;
