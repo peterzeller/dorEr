@@ -113,7 +113,7 @@ handle_call2({generate, Name, Gen}, State) ->
           end, ReplayGen),
           {ok, R, State};
         _ ->
-          {ok, RM, ReplayGen2} = replay_value(Name, Gen, ReplayGen, State),
+          {ok, RM, ReplayGen2} = replay_value(Name, Gen, ReplayGen, State#state.size),
           {ok, RM, State#state{replay_gen = ReplayGen2}}
       end
   end,
@@ -122,9 +122,9 @@ handle_call2({generate, Name, Gen}, State) ->
       Res = dorer_generators:remove_metadata(Gen, ResM),
       {reply, {ok, Res}, State2#state{
         generated_values = [{Name, Gen, ResM} | State#state.generated_values]
-      }};
-    {error, Reason} ->
-      {reply, {error, Reason}, State}
+      }}
+%%    {error, Reason} ->
+%%      {reply, {error, Reason}, State}
   end;
 handle_call2({init, I}, State) ->
   NewState = State#state{
@@ -150,7 +150,7 @@ handle_call2({log, Message}, State) ->
 handle_call2(Request, State) ->
   {reply, {unhandled_request, Request}, State}.
 
-replay_value(Name, Gen, ReplayGen, Size) ->
+replay_value(Name, Gen, ReplayGen, Size) when is_integer(Size) ->
   case lists:search(fun({Name2, Gen2, _Val}) ->
     Name == Name2 andalso dorer_generators:name(Gen) == dorer_generators:name(Gen2) end, ReplayGen) of
     {value, X = {_Name2, _Gen2, Val}} ->

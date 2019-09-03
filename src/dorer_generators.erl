@@ -394,12 +394,12 @@ produce_list(ItemGen, N) ->
 
 
 -spec random_gen(generator_ext(T), non_neg_integer()) -> T.
-random_gen(Generator = #generator{}, Size) ->
+random_gen(Generator = #generator{}, Size) when is_integer(Size) ->
   Produce = Generator#generator.random_gen#random_gen.produce,
   Produce(Size);
-random_gen(Tuple, Size) when is_tuple(Tuple) ->
+random_gen(Tuple, Size) when is_tuple(Tuple), is_integer(Size) ->
   list_to_tuple([random_gen(E, Size) || E <- tuple_to_list(Tuple)]);
-random_gen(Elem, _Size) ->
+random_gen(Elem, Size) when is_integer(Size) ->
   Elem.
 
 
