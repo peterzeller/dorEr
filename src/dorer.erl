@@ -18,15 +18,22 @@ log := any(),
 gen := any()
 }.
 
+% The default options
+-spec default_options() -> options().
 default_options() -> #{
   strategy => random,
   max_shrink_time => {3, second},
+  n => 100,
   print_generated_values => if_log_empty
 }.
 
+%% See check/2, uses default options
+-spec check(fun(() -> any())) -> ok.
 check(Fun) ->
   check(#{}, Fun).
 
+% Runs the given function multiple times to explore different executions.
+% Within the function one can use dorer:gen to generate values
 -spec check(options(), fun(() -> any())) -> ok.
 check(Options1, Fun) ->
   Options = maps:merge(default_options(), Options1),
@@ -141,9 +148,13 @@ print_log(Data) ->
 check_small(_Options, _Fun) ->
   erlang:error(not_implemented).
 
+% logs a message, only shown on test failures
+-spec log(string()) -> ok.
 log(Message) ->
   dorer_server:call({log, Message}).
 
+% logs a message using a format string and arguments, only shown on test failures
+-spec log(string(), list()) -> ok.
 log(Message, Args) ->
   IoList = io_lib:format(Message, Args),
   Bin = erlang:iolist_to_binary(IoList),
@@ -163,8 +174,14 @@ find_error(I, N, Fun) ->
       end
   end.
 
+% generates a value with name 'default', see gen/2
+-spec gen(dorer_generators:generator_ext(T)) -> T.
 gen(Generator) ->
   gen([default], Generator).
+
+% Generates a value using the given generator (see dorer_generators module)
+% The name can be used together with dorer:generators:has_more to generate a sequence of values.
+-spec gen([atom()] | atom(), dorer_generators:generator_ext(T)) -> T.
 gen(Name, Generator) when not is_list(Name) ->
   gen([Name], Generator);
 gen(Name, Generator) ->

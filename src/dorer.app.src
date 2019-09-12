@@ -1,5 +1,5 @@
 {application, dorer,
- [{description, "An OTP library"},
+ [{description, "Property based testing library for exploring different executions in an imperative style."},
   {vsn, "0.1.0"},
   {registered, []},
   {applications,

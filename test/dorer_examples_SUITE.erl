@@ -3,26 +3,25 @@
 -include_lib("eunit/include/eunit.hrl").
 
 
--export([all/0, simple2_test/1]).
+-export([all/0, simple2_test/1, simple_test/1]).
 
 all() -> [
+  simple_test,
   simple2_test
 ].
 
 biggest([Head | _Tail]) ->
   Head.
 
-%%simple_test() ->
-%%  dorer:check(fun() ->
-%%    List = dorer:gen(dorer_generators:list(dorer_generators:integer())),
-%%    dorer:log("List = ~p", [List]),
-%%    io:format(user, "List = ~p~n", [List]),
-%%    case List of
-%%      [] -> ok;
-%%      _ ->
-%%        ?assertEqual(lists:last(lists:sort(List)), biggest(List))
-%%    end
-%%  end).
+simple_test(_Config) ->
+  dorer:check(fun() ->
+    List = dorer:gen(dorer_generators:list(dorer_generators:integer())),
+    case List of
+      [] -> ok;
+      _ ->
+        ?assertEqual(lists:last(lists:sort(List)), biggest(List))
+    end
+  end).
 
 
 gen_list() ->
