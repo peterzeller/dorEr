@@ -156,10 +156,15 @@ log(Message) ->
 % logs a message using a format string and arguments, only shown on test failures
 -spec log(string(), list()) -> ok.
 log(Message, Args) ->
-  IoList = io_lib:format(Message, Args),
-  Bin = erlang:iolist_to_binary(IoList),
-  String = binary_to_list(Bin),
-  dorer_server:call({log, String}).
+  case whereis(dorer_server) of
+    undefined ->
+      io:format(Message, Args);
+    _ ->
+      IoList = io_lib:format(Message, Args),
+      Bin = erlang:iolist_to_binary(IoList),
+      String = binary_to_list(Bin),
+      dorer_server:call({log, String})
+  end.
 
 
 find_error(N, Fun) ->
