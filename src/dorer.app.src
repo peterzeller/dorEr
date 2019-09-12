@@ -9,6 +9,7 @@
   {env,[]},
   {modules, []},
 
-  {licenses, ["Apache 2.0"]},
-  {links, []}
+  {maintainers, ["Peter Zeller"]},
+  {licenses,["Apache 2.0"]},
+  {links,[{"Github", "https://github.com/peterzeller/dorEr"}]}
  ]}.
